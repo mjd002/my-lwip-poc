@@ -1,0 +1,98 @@
+# Build full lwIP into a DLL using mingw-w64
+
+# Prefer a mingw-w64 gcc on PATH, fall back to WinLibs in LOCALAPPDATA
+$gccCmd = Get-Command 'x86_64-w64-mingw32-gcc.exe' -ErrorAction SilentlyContinue
+if ($gccCmd) {
+    $gcc = $gccCmd.Source
+    Write-Host "Using gcc from PATH: $gcc"
+} else {
+    # Construct the WinLibs path reliably from LOCALAPPDATA
+    $winlibs = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin'
+    if (-not (Test-Path $winlibs)) {
+        Write-Error "WinLibs mingw64 not found at $winlibs and no gcc on PATH. Ensure mingw-w64 is installed or set PATH."
+        exit 1
+    }
+    $gcc = Join-Path $winlibs 'x86_64-w64-mingw32-gcc.exe'
+    Write-Host "Using WinLibs gcc at: $gcc"
+}
+
+# Source files to compile from lwip. We pick a minimal set: core init, inet checksum, and required dependencies.
+# Determine project root (one level up from the cwrap script)
+$root = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$projectRoot = Resolve-Path (Join-Path $root '..')
+$lwipRoot = Join-Path $projectRoot 'lwip-1.4.1\src'
+
+# Minimal focused set for POC: include inet_chksum and def implementation only,
+# plus our C wrapper so the DLL exports wrappers directly.
+$sources = @()
+
+# Minimal focused set for expanded POC: inet_chksum + def + lwip_init stubs + wrapper
+$s_inet = Join-Path $lwipRoot 'core\ipv4\inet_chksum.c'
+$s_def = Join-Path $lwipRoot 'core\def.c'
+$s_mem = Join-Path $lwipRoot 'core\mem.c'
+$s_memp = Join-Path $lwipRoot 'core\memp.c'
+$s_pbuf = Join-Path $lwipRoot 'core\pbuf.c'
+$s_wrapper = Join-Path $root 'wrapper_lwip.c'
+$s_stubs = Join-Path $root 'lwip_stubs.c'
+# Include etharp.c to provide ARP helpers used by netif when present
+# In this lwIP tree etharp.c lives under the top-level 'netif' directory
+$s_etharp = Join-Path $lwipRoot 'netif\etharp.c'
+$s_netif = Join-Path $lwipRoot 'core\netif.c'
+# IPv4 core sources: ip.c, inet.c, ip_addr.c
+# ip.c for this lwIP tree lives under core/ipv4
+$s_ip = Join-Path $lwipRoot 'core\ipv4\ip.c'
+$s_inet4 = Join-Path $lwipRoot 'core\ipv4\inet.c'
+$s_ip_addr = Join-Path $lwipRoot 'core\ipv4\ip_addr.c'
+$s_ip_frag = Join-Path $lwipRoot 'core\ipv4\ip_frag.c'
+$s_icmp = Join-Path $lwipRoot 'core\ipv4\icmp.c'
+if (Test-Path $s_inet) { $sources += $s_inet }
+if (Test-Path $s_def) { $sources += $s_def }
+if (Test-Path $s_mem) { $sources += $s_mem }
+if (Test-Path $s_memp) { $sources += $s_memp }
+if (Test-Path $s_pbuf) { $sources += $s_pbuf }
+if (Test-Path $s_stubs) { $sources += $s_stubs }
+if (Test-Path $s_wrapper) { $sources += $s_wrapper }
+if (Test-Path $s_etharp) { $sources += $s_etharp }
+if (Test-Path $s_netif) { $sources += $s_netif }
+if (Test-Path $s_ip) { $sources += $s_ip }
+if (Test-Path $s_inet4) { $sources += $s_inet4 }
+if (Test-Path $s_ip_addr) { $sources += $s_ip_addr }
+if (Test-Path $s_ip_frag) { $sources += $s_ip_frag }
+if (Test-Path $s_icmp) { $sources += $s_icmp }
+
+if ($sources.Count -eq 0) {
+    Write-Error "No lwIP source files found for minimal build under $lwipRoot"
+    exit 1
+}
+
+$srcList = $sources -join ' '
+$outDll = Join-Path $projectRoot 'cwrap\lwip_extended.dll'
+$implib = Join-Path $projectRoot 'cwrap\liblwip_extended.a'
+
+$includeDirs = @(
+    "-I$($lwipRoot)\include",
+    "-I$($lwipRoot)\include\ipv4",
+    "-I$($lwipRoot)\include\ipv6"
+)
+$includeFlags = $includeDirs -join ' '
+
+Write-Host "Invoking: $gcc with $($sources.Count) source files"
+
+# Build argument array for gcc to avoid quoting/escaping issues
+$args = @('-O2','-shared','-o',$outDll)
+$args += $sources
+$args += "-Wl,--out-implib,$implib"
+$args += $includeFlags -split ' '
+$args += '-D__WINDOWS__'
+$args += '-DLWIP_COMPAT_SOCKET'
+
+Write-Host "Command: $gcc $($args -join ' ')"
+
+# Run gcc directly and capture exit code
+& $gcc @args
+$exit = $LASTEXITCODE
+if ($exit -ne 0) {
+    Write-Error "Build failed with exit code $exit"
+    exit $exit
+}
+Write-Host "Built $outDll"

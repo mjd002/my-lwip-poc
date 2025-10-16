@@ -1,0 +1,9 @@
+[project]
+name = "gpt_proj"
+version = "0.0.0"
+description = "Minimal scaffold for GPT_PROJ"
+requires-python = ">=3.9.6, <4.0"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
