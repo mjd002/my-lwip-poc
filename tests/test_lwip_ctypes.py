@@ -1,6 +1,7 @@
 import ctypes
 import os
 import sys
+from tests.unload_cdll import unload_cdll
 
 HERE = os.path.dirname(__file__)
 DLL_PATH = os.path.join(HERE, '..', 'cwrap', 'lwip_wrapper.dll')
@@ -19,3 +20,5 @@ def test_lwip_get_version_and_add():
     lib.lwip_add_ints.argtypes = (ctypes.c_int, ctypes.c_int)
     lib.lwip_add_ints.restype = ctypes.c_int
     assert lib.lwip_add_ints(2, 3) == 5
+    # best-effort unload to free file locks on Windows
+    unload_cdll(lib)

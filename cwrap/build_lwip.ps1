@@ -88,11 +88,59 @@ $args += '-DLWIP_COMPAT_SOCKET'
 
 Write-Host "Command: $gcc $($args -join ' ')"
 
-# Run gcc directly and capture exit code
-& $gcc @args
-$exit = $LASTEXITCODE
-if ($exit -ne 0) {
-    Write-Error "Build failed with exit code $exit"
-    exit $exit
+# Ensure old outputs are removed before linking to reduce "Permission denied" flakes on Windows
+for ($i = 0; $i -lt 10; $i++) {
+    if (Test-Path $outDll) {
+        try {
+            Remove-Item -Force -ErrorAction Stop $outDll
+        } catch {
+            Start-Sleep -Milliseconds 200
+            continue
+        }
+    }
+    if (Test-Path $implib) {
+        try {
+            Remove-Item -Force -ErrorAction Stop $implib
+        } catch {
+            Start-Sleep -Milliseconds 200
+            continue
+        }
+    }
+    break
 }
-Write-Host "Built $outDll"
+
+# Try linking up to a few times if transient permission errors occur
+$maxAttempts = 3
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Write-Host "Link attempt $attempt/$maxAttempts"
+    # run gcc and capture stderr to inspect for permission-denied messages
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    & $gcc @args 2> $tmpErr
+    $exit = $LASTEXITCODE
+    if ($exit -eq 0) {
+        Write-Host "Built $outDll"
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        break
+    }
+
+    $stderr = Get-Content -Raw -ErrorAction SilentlyContinue $tmpErr
+    Write-Host "Linker exit code: $exit"
+    if ($stderr -and $stderr -match "Permission denied") {
+        Write-Host "Detected 'Permission denied' in linker stderr. Will sleep 500ms and retry."
+        Start-Sleep -Milliseconds 500
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        continue
+    }
+
+    if ($attempt -lt $maxAttempts) {
+        Write-Host "Link failed (exit $exit). Sleeping 300ms and retrying..."
+        Start-Sleep -Milliseconds 300
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        continue
+    } else {
+        Write-Host "Link stderr:\n$stderr"
+        Write-Error "Build failed with exit code $exit"
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        exit $exit
+    }
+}
