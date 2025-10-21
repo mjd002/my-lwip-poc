@@ -23,7 +23,14 @@ try:
     data = (ctypes.c_ubyte * 4)(1, 2, 3, 4)
     result = chksum(data, 4)
     print('inet_chksum result:', int(result))
-    sys.exit(0)
+        # unload and exit
+        try:
+            if os.name == 'nt':
+                ctypes.windll.kernel32.FreeLibrary(lib._handle)
+        except Exception:
+            pass
+        # exit
+        sys.exit(0)
 except AttributeError as e:
     print('ERROR: symbol missing:', e)
     sys.exit(4)

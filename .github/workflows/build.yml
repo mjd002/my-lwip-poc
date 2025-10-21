@@ -19,7 +19,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            C:\Program Files\msys2-64\var\cache\pacman\pkg
+            C:\tools\msys64\var\cache\pacman\pkg
           key: ${{ runner.os }}-msys2-pacman-${{ hashFiles('**/cwrap/build_lwip.ps1') }}
           restore-keys: |
             ${{ runner.os }}-msys2-pacman-
@@ -32,22 +32,16 @@ jobs:
           key: ${{ runner.os }}-winlibs-${{ hashFiles('**/cwrap/build_lwip.ps1') }}
           restore-keys: |
             ${{ runner.os }}-winlibs-
-      - name: Install MSYS2 and mingw-w64
-        shell: pwsh
-        run: |
-          # Install MSYS2 from the official Chocolatey package (fast on GH-hosted runners)
-          choco install msys2 -y
-          # Initialize MSYS2 environment and update packages
-          $msys = "${env:ProgramFiles}\msys2-64"
-          $pacman = Join-Path $msys 'usr\bin\bash.exe'
-          & $pacman -lc "pacman -Syu --noconfirm" || true
-          # Install mingw-w64 toolchain packages (gcc, make)
-          & $pacman -lc "pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-crt-git mingw-w64-x86_64-winpthreads mingw-w64-x86_64-toolchain"
-          # Add mingw64 bin to PATH for subsequent steps
-          $mingw64 = Join-Path $msys 'mingw64\bin'
-          Write-Host "Adding mingw to PATH: $mingw64"
-          echo "##[add-path]$mingw64"
-          $env:PATH = "$mingw64;$env:PATH"
+      - name: Set up MSYS2 and mingw-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: |
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-crt-git
+            mingw-w64-x86_64-winpthreads
+            mingw-w64-x86_64-toolchain
 
       - name: Build lwIP DLL
         shell: pwsh

@@ -65,7 +65,6 @@ if ($sources.Count -eq 0) {
     exit 1
 }
 
-$srcList = $sources -join ' '
 $outDll = Join-Path $projectRoot 'cwrap\lwip_extended.dll'
 $implib = Join-Path $projectRoot 'cwrap\liblwip_extended.a'
 
@@ -79,20 +78,77 @@ $includeFlags = $includeDirs -join ' '
 Write-Host "Invoking: $gcc with $($sources.Count) source files"
 
 # Build argument array for gcc to avoid quoting/escaping issues
-$args = @('-O2','-shared','-o',$outDll)
-$args += $sources
-$args += "-Wl,--out-implib,$implib"
-$args += $includeFlags -split ' '
-$args += '-D__WINDOWS__'
-$args += '-DLWIP_COMPAT_SOCKET'
+$gccArgs = @('-O2','-shared','-o',$outDll)
+# append sources (PowerShell will expand the array)
+$gccArgs += $sources
+$gccArgs += "-Wl,--out-implib,$implib"
+$gccArgs += $includeFlags -split ' '
+$gccArgs += '-D__WINDOWS__'
+$gccArgs += '-DLWIP_COMPAT_SOCKET'
 
-Write-Host "Command: $gcc $($args -join ' ')"
+Write-Host "Command: $gcc $($gccArgs -join ' ')"
 
-# Run gcc directly and capture exit code
-& $gcc @args
-$exit = $LASTEXITCODE
-if ($exit -ne 0) {
-    Write-Error "Build failed with exit code $exit"
-    exit $exit
+# Ensure old outputs are removed before linking to reduce "Permission denied" flakes on Windows
+for ($i = 0; $i -lt 10; $i++) {
+    if (Test-Path $outDll) {
+        try {
+            Remove-Item -Force -ErrorAction Stop $outDll
+        } catch {
+            Start-Sleep -Milliseconds 200
+            continue
+        }
+    }
+    if (Test-Path $implib) {
+        try {
+            Remove-Item -Force -ErrorAction Stop $implib
+        } catch {
+            Start-Sleep -Milliseconds 200
+            continue
+        }
+    }
+    break
 }
-Write-Host "Built $outDll"
+
+# Try linking up to a few times if transient permission errors occur
+$maxAttempts = 6
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Write-Host "Link attempt $attempt/$maxAttempts"
+    # run gcc and capture stderr to inspect for permission-denied messages
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    & $gcc @gccArgs 2> $tmpErr
+    $exit = $LASTEXITCODE
+    if ($exit -eq 0) {
+        Write-Host "Built $outDll"
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        break
+    }
+
+    $stderr = Get-Content -Raw -ErrorAction SilentlyContinue $tmpErr
+    Write-Host "Linker exit code: $exit"
+    if ($stderr -and $stderr -match "Permission denied") {
+        # Exponential backoff and a best-effort GC to encourage other processes
+        $backoff = 500 * $attempt
+        Write-Host "Detected 'Permission denied' in linker stderr. Sleeping ${backoff}ms and retrying (attempt will also trigger GC)."
+        # best-effort: try to remove any stale outputs before waiting
+        try { Remove-Item -Force $outDll -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -Force $implib -ErrorAction SilentlyContinue } catch { }
+        # a GC/Finalizers hint may help if the build is run from a process that previously loaded the DLL
+        try { [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers() } catch { }
+        Start-Sleep -Milliseconds $backoff
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        continue
+    }
+
+    if ($attempt -lt $maxAttempts) {
+        $backoff = 300 * $attempt
+        Write-Host "Link failed (exit $exit). Sleeping ${backoff}ms and retrying..."
+        Start-Sleep -Milliseconds $backoff
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        continue
+    } else {
+        Write-Host "Link stderr:\n$stderr"
+        Write-Error "Build failed with exit code $exit"
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        exit $exit
+    }
+}
