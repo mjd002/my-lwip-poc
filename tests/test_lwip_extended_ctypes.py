@@ -1,6 +1,6 @@
 import os
 import subprocess
-import ctypes
+import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 CWRAP = os.path.join(ROOT, 'cwrap')
@@ -17,40 +17,6 @@ def test_build_and_load_lwip_extended():
     build_lwip()
     assert os.path.exists(DLL), f"Built DLL not found at {DLL}"
 
-    # load and exercise symbols; always attempt to unload in finally
-    lib = ctypes.CDLL(DLL)
-    try:
-        # call init if present
-        if hasattr(lib, 'lwip_init_wrapper'):
-            lib.lwip_init_wrapper()
-
-        # call checksum wrapper
-        assert hasattr(lib, 'lwip_inet_chksum_wrapper')
-        chksum = lib.lwip_inet_chksum_wrapper
-        chksum.argtypes = (ctypes.c_void_p, ctypes.c_int)
-        chksum.restype = ctypes.c_uint16
-        data = (ctypes.c_ubyte * 4)(1, 2, 3, 4)
-        s = chksum(data, 4)
-        assert isinstance(s, int)
-
-        # call tcp/udp init wrappers if present
-        if hasattr(lib, 'tcp_init_wrapper'):
-            lib.tcp_init_wrapper()
-        if hasattr(lib, 'udp_init_wrapper'):
-            lib.udp_init_wrapper()
-
-        # call sys_now wrapper and check it returns an integer-like value
-        if hasattr(lib, 'sys_now_wrapper'):
-            lib.sys_now_wrapper.restype = ctypes.c_uint32
-            now = lib.sys_now_wrapper()
-            assert isinstance(now, int)
-        # clear local function references so they don't keep the DLL alive
-        try:
-            chksum = None
-            now = None
-        except Exception:
-            pass
-    finally:
-        # best-effort unload to free file locks on Windows
-        from tests.unload_cdll import unload_cdll
-        unload_cdll(lib)
+    runner = os.path.join(os.path.dirname(__file__), '_isolated_dll_runner.py')
+    # Run the isolated runner (separate process) to avoid in-process DLL locks
+    subprocess.check_call([sys.executable, runner, '--dll', DLL, '--mode', 'extended'])

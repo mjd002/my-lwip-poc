@@ -65,7 +65,6 @@ if ($sources.Count -eq 0) {
     exit 1
 }
 
-$srcList = $sources -join ' '
 $outDll = Join-Path $projectRoot 'cwrap\lwip_extended.dll'
 $implib = Join-Path $projectRoot 'cwrap\liblwip_extended.a'
 
@@ -79,14 +78,15 @@ $includeFlags = $includeDirs -join ' '
 Write-Host "Invoking: $gcc with $($sources.Count) source files"
 
 # Build argument array for gcc to avoid quoting/escaping issues
-$args = @('-O2','-shared','-o',$outDll)
-$args += $sources
-$args += "-Wl,--out-implib,$implib"
-$args += $includeFlags -split ' '
-$args += '-D__WINDOWS__'
-$args += '-DLWIP_COMPAT_SOCKET'
+$gccArgs = @('-O2','-shared','-o',$outDll)
+# append sources (PowerShell will expand the array)
+$gccArgs += $sources
+$gccArgs += "-Wl,--out-implib,$implib"
+$gccArgs += $includeFlags -split ' '
+$gccArgs += '-D__WINDOWS__'
+$gccArgs += '-DLWIP_COMPAT_SOCKET'
 
-Write-Host "Command: $gcc $($args -join ' ')"
+Write-Host "Command: $gcc $($gccArgs -join ' ')"
 
 # Ensure old outputs are removed before linking to reduce "Permission denied" flakes on Windows
 for ($i = 0; $i -lt 10; $i++) {
@@ -110,12 +110,12 @@ for ($i = 0; $i -lt 10; $i++) {
 }
 
 # Try linking up to a few times if transient permission errors occur
-$maxAttempts = 3
+$maxAttempts = 6
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     Write-Host "Link attempt $attempt/$maxAttempts"
     # run gcc and capture stderr to inspect for permission-denied messages
     $tmpErr = [System.IO.Path]::GetTempFileName()
-    & $gcc @args 2> $tmpErr
+    & $gcc @gccArgs 2> $tmpErr
     $exit = $LASTEXITCODE
     if ($exit -eq 0) {
         Write-Host "Built $outDll"
@@ -126,15 +126,23 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     $stderr = Get-Content -Raw -ErrorAction SilentlyContinue $tmpErr
     Write-Host "Linker exit code: $exit"
     if ($stderr -and $stderr -match "Permission denied") {
-        Write-Host "Detected 'Permission denied' in linker stderr. Will sleep 500ms and retry."
-        Start-Sleep -Milliseconds 500
+        # Exponential backoff and a best-effort GC to encourage other processes
+        $backoff = 500 * $attempt
+        Write-Host "Detected 'Permission denied' in linker stderr. Sleeping ${backoff}ms and retrying (attempt will also trigger GC)."
+        # best-effort: try to remove any stale outputs before waiting
+        try { Remove-Item -Force $outDll -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -Force $implib -ErrorAction SilentlyContinue } catch { }
+        # a GC/Finalizers hint may help if the build is run from a process that previously loaded the DLL
+        try { [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers() } catch { }
+        Start-Sleep -Milliseconds $backoff
         Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
         continue
     }
 
     if ($attempt -lt $maxAttempts) {
-        Write-Host "Link failed (exit $exit). Sleeping 300ms and retrying..."
-        Start-Sleep -Milliseconds 300
+        $backoff = 300 * $attempt
+        Write-Host "Link failed (exit $exit). Sleeping ${backoff}ms and retrying..."
+        Start-Sleep -Milliseconds $backoff
         Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
         continue
     } else {
