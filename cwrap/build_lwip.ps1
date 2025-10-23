@@ -34,6 +34,8 @@ $s_memp = Join-Path $lwipRoot 'core\memp.c'
 $s_pbuf = Join-Path $lwipRoot 'core\pbuf.c'
 $s_wrapper = Join-Path $root 'wrapper_lwip.c'
 $s_stubs = Join-Path $root 'lwip_stubs.c'
+# Provide a minimal sys_arch implementation (sys_now) in cwrap/sys_arch.c
+$s_sys_arch = Join-Path $root 'sys_arch.c'
 # Include etharp.c to provide ARP helpers used by netif when present
 # In this lwIP tree etharp.c lives under the top-level 'netif' directory
 $s_etharp = Join-Path $lwipRoot 'netif\etharp.c'
@@ -52,6 +54,7 @@ if (Test-Path $s_memp) { $sources += $s_memp }
 if (Test-Path $s_pbuf) { $sources += $s_pbuf }
 if (Test-Path $s_stubs) { $sources += $s_stubs }
 if (Test-Path $s_wrapper) { $sources += $s_wrapper }
+if (Test-Path $s_sys_arch) { $sources += $s_sys_arch }
 if (Test-Path $s_etharp) { $sources += $s_etharp }
 if (Test-Path $s_netif) { $sources += $s_netif }
 if (Test-Path $s_ip) { $sources += $s_ip }
@@ -78,13 +81,13 @@ $includeFlags = $includeDirs -join ' '
 Write-Host "Invoking: $gcc with $($sources.Count) source files"
 
 # Build argument array for gcc to avoid quoting/escaping issues
-$gccArgs = @('-O2','-shared','-o',$outDll)
+$gccArguments = @('-O2','-shared','-o',$outDll)
 # append sources (PowerShell will expand the array)
-$gccArgs += $sources
-$gccArgs += "-Wl,--out-implib,$implib"
-$gccArgs += $includeFlags -split ' '
-$gccArgs += '-D__WINDOWS__'
-$gccArgs += '-DLWIP_COMPAT_SOCKET'
+$gccArguments += $sources
+$gccArguments += "-Wl,--out-implib,$implib"
+$gccArguments += $includeFlags -split ' '
+$gccArguments += '-D__WINDOWS__'
+$gccArguments += '-DLWIP_COMPAT_SOCKET'
 
 Write-Host "Command: $gcc $($gccArgs -join ' ')"
 
@@ -115,7 +118,7 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     Write-Host "Link attempt $attempt/$maxAttempts"
     # run gcc and capture stderr to inspect for permission-denied messages
     $tmpErr = [System.IO.Path]::GetTempFileName()
-    & $gcc @gccArgs 2> $tmpErr
+    & $gcc @gccArguments 2> $tmpErr
     $exit = $LASTEXITCODE
     if ($exit -eq 0) {
         Write-Host "Built $outDll"

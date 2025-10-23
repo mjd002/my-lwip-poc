@@ -49,9 +49,13 @@ jobs:
           Set-Location -LiteralPath ${{ github.workspace }}
           # Ensure LOCALAPPDATA points to a writable location for msys/WinLibs lookups
           $env:LOCALAPPDATA = $env:LOCALAPPDATA
+          # Stability knobs for transient link/file-lock issues
+          $env:LINK_RETRY_MAX = '8'
+          $env:LINK_RETRY_BACKOFF_MS = '500'
           .\cwrap\build_lwip.ps1
       - name: Run pytest
         run: |
           Set-Location -LiteralPath ${{ github.workspace }}
           python -m pip install -U pip pytest
-          python -m pytest -q tests/test_lwip_extended_ctypes.py -q
+          # Run full test suite; keep output concise with -q
+          python -m pytest -q
