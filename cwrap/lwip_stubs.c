@@ -18,7 +18,7 @@ void udp_init(void) { }
 void tcp_init(void) { }
 
 /* Minimal timers / sys functions */
-unsigned long sys_now(void) { return 0; }
+/* sys_now is provided by cwrap/sys_arch.c; do not define it here to avoid duplicate symbols. */
 
 /* Some tcp helper symbols used by pbuf/timers when building small sets */
 void tcp_tmr(void) { }

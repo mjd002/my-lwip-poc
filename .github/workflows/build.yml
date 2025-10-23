@@ -7,14 +7,46 @@ on:
     branches: [ main, master ]
 
 jobs:
+  build-only-windows:
+    runs-on: windows-latest
+    name: Build-only (Windows)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSYS2 and mingw-w64 (minimal)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: |
+            mingw-w64-x86_64-gcc
+      - name: Build lwIP DLL (build-only)
+        shell: pwsh
+        run: |
+          Set-Location -LiteralPath ${{ github.workspace }}
+          # Slightly higher link-retry knobs for CI
+          if (-not $env:LINK_RETRY_MAX) { $env:LINK_RETRY_MAX = '10' }
+          if (-not $env:LINK_RETRY_BACKOFF_MS) { $env:LINK_RETRY_BACKOFF_MS = '700' }
+          .\cwrap\build_lwip.ps1 2> .\gha_build_stderr_buildonly.log
+      - name: Upload build-only artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-only-artifacts
+          path: |
+            cwrap\lwip_extended.dll
+            cwrap\liblwip_extended.a
+            gha_build_stderr_buildonly.log
+
   build-windows:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.11']
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: ${{ matrix.python }}
       - name: Cache MSYS2 pacman packages
         uses: actions/cache@v4
         with:
@@ -49,9 +81,20 @@ jobs:
           Set-Location -LiteralPath ${{ github.workspace }}
           # Ensure LOCALAPPDATA points to a writable location for msys/WinLibs lookups
           $env:LOCALAPPDATA = $env:LOCALAPPDATA
-          .\cwrap\build_lwip.ps1
+          # Stability knobs for transient link/file-lock issues
+          if (-not $env:LINK_RETRY_MAX) { $env:LINK_RETRY_MAX = '8' }
+          if (-not $env:LINK_RETRY_BACKOFF_MS) { $env:LINK_RETRY_BACKOFF_MS = '500' }
+          .\cwrap\build_lwip.ps1 2> .\gha_build_stderr.log
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts-${{ matrix.python }}
+          path: |
+            cwrap\lwip_extended.dll
+            cwrap\liblwip_extended.a
+            gha_build_stderr.log
       - name: Run pytest
         run: |
           Set-Location -LiteralPath ${{ github.workspace }}
           python -m pip install -U pip pytest
-          python -m pytest -q tests/test_lwip_extended_ctypes.py -q
+          python -m pytest -q
