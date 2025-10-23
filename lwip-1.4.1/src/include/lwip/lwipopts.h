@@ -4,8 +4,11 @@
 #ifndef __LWIPOPTS_H__
 #define __LWIPOPTS_H__
 
-/* Prevent having to link sys_arch.c (we don't test the API layers in unit tests) */
+#/* Prevent having to link sys_arch.c (we don't test the API layers in unit tests) */
+/* Allow NO_SYS to be overridden by compiler flags (e.g. -DNO_SYS=0) */
+#ifndef NO_SYS
 #define NO_SYS                          1
+#endif
 #define LWIP_NETCONN                    0
 #define LWIP_SOCKET                     0
 

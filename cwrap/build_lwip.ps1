@@ -80,16 +80,15 @@ $includeFlags = $includeDirs -join ' '
 
 Write-Host "Invoking: $gcc with $($sources.Count) source files"
 
-# Build argument array for gcc to avoid quoting/escaping issues
-$gccArguments = @('-O2','-shared','-o',$outDll)
-# append sources (PowerShell will expand the array)
-$gccArguments += $sources
-$gccArguments += "-Wl,--out-implib,$implib"
-$gccArguments += $includeFlags -split ' '
-$gccArguments += '-D__WINDOWS__'
-$gccArguments += '-DLWIP_COMPAT_SOCKET'
+# We'll compile sources to object files and link them. Only compile sys_arch.c with -DNO_SYS=0
+$objDir = Join-Path $root 'build'
+if (-not (Test-Path $objDir)) { New-Item -ItemType Directory -Path $objDir | Out-Null }
 
-Write-Host "Command: $gcc $($gccArgs -join ' ')"
+# Common compile flags
+$commonCompile = @('-O2', '-c')
+$commonCompile += $includeFlags -split ' '
+$commonCompile += '-D__WINDOWS__'
+$commonCompile += '-DLWIP_COMPAT_SOCKET'
 
 # Ensure old outputs are removed before linking to reduce "Permission denied" flakes on Windows
 for ($i = 0; $i -lt 10; $i++) {
@@ -114,11 +113,42 @@ for ($i = 0; $i -lt 10; $i++) {
 
 # Try linking up to a few times if transient permission errors occur
 $maxAttempts = 6
+####################################
+# Compile each source to object file
+####################################
+Write-Host "Compiling ${sources.Count} sources to objects in $objDir"
+$objFiles = @()
+foreach ($src in $sources) {
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($src)
+    $obj = Join-Path $objDir ($base + '.o')
+    $compileArgs = @($commonCompile)
+    # If this is the sys_arch.c source, compile it with NO_SYS=0 so the port layer sees OS primitives
+    if ($src -eq $s_sys_arch) { $compileArgs += '-DNO_SYS=0' }
+    $compileArgs += $src
+    $compileArgs += '-o'; $compileArgs += $obj
+    Write-Host "Compiling: $gcc $($compileArgs -join ' ')"
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    & $gcc @compileArgs 2> $tmpErr
+    $exit = $LASTEXITCODE
+    if ($exit -ne 0) {
+        $stderr = Get-Content -Raw -ErrorAction SilentlyContinue $tmpErr
+        Write-Host ("Compiler stderr on {0}`n{1}" -f $src, $stderr)
+        Write-Error ("Compilation failed with exit code {0}" -f $exit)
+        Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+        exit $exit
+    }
+    Remove-Item -Force $tmpErr -ErrorAction SilentlyContinue
+    $objFiles += $obj
+}
+
+# Link attempt with the object files
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     Write-Host "Link attempt $attempt/$maxAttempts"
-    # run gcc and capture stderr to inspect for permission-denied messages
+    $linkArgs = @('-shared','-o',$outDll)
+    $linkArgs += $objFiles
+    $linkArgs += "-Wl,--out-implib,$implib"
     $tmpErr = [System.IO.Path]::GetTempFileName()
-    & $gcc @gccArguments 2> $tmpErr
+    & $gcc @linkArgs 2> $tmpErr
     $exit = $LASTEXITCODE
     if ($exit -eq 0) {
         Write-Host "Built $outDll"
